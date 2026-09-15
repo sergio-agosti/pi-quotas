@@ -18,6 +18,12 @@ import {
 } from "./providers.js";
 import { resolveOpenCodeGoConfigCached } from "./opencode-go-config.js";
 import { queryOpenCodeGoQuota } from "./opencode-go.js";
+import {
+  readClaudeCacheOutcome,
+  recordClaudeRateLimit,
+  recordClaudeSuccess,
+  withClaudeCacheLock,
+} from "./anthropic-cache.js";
 
 const FETCH_TIMEOUT_MS = 15_000;
 const COPILOT_VERSION = "0.35.0";
@@ -64,6 +70,7 @@ type FetchJsonResult =
       status?: number;
       message: string;
       kind: "timeout" | "cancelled" | "http" | "network";
+      retryAfterMs?: number | null;
     };
 
 /**
@@ -75,6 +82,15 @@ type FetchJsonResult =
  * footer is ugly and confusing, so extract the inner message field when the
  * body parses as JSON; otherwise return the body unchanged.
  */
+/** Parse an HTTP `retry-after` header (seconds or HTTP-date) into ms. */
+function parseRetryAfterMs(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric >= 0) return numeric * 1000;
+  const dateMs = new Date(value).getTime();
+  return Number.isFinite(dateMs) ? Math.max(0, dateMs - Date.now()) : null;
+}
+
 function cleanHttpErrorMessage(body: string): string {
   const trimmed = body.trim();
   if (!trimmed) return "";
@@ -112,6 +128,7 @@ async function fetchJson(
         status: response.status,
         message: cleanHttpErrorMessage(body) || response.statusText || `HTTP ${response.status}`,
         kind: "http",
+        retryAfterMs: parseRetryAfterMs(response.headers.get("retry-after")),
       };
     }
     return { ok: true, data: await response.json() };
@@ -159,19 +176,56 @@ export async function fetchAnthropicQuotasWithToken(
       "not_applicable",
     );
   }
-  const result = await fetchJson(
-    "https://api.anthropic.com/api/oauth/usage",
-    {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "anthropic-beta": "oauth-2025-04-20",
-        Accept: "application/json",
+
+  // Serve a fresh shared cache hit, or last-known-good windows during a 429
+  // cooldown, before touching the network (mirrors pi-usage-bars' Claude
+  // cache + backoff, so the footer keeps showing Claude usage while the
+  // Anthropic /api/oauth/usage endpoint is rate limited).
+  const cached = readClaudeCacheOutcome();
+  if (cached) {
+    if (cached.windows.length > 0) return success("anthropic", cached.windows);
+    return failure(cached.warning ?? "Rate limited", "http");
+  }
+
+  // Re-check under the shared file lock to avoid racing other Pi processes.
+  return withClaudeCacheLock(async () => {
+    const underLock = readClaudeCacheOutcome();
+    if (underLock) {
+      if (underLock.windows.length > 0)
+        return success("anthropic", underLock.windows);
+      return failure(underLock.warning ?? "Rate limited", "http");
+    }
+
+    const result = await fetchJson(
+      "https://api.anthropic.com/api/oauth/usage",
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "anthropic-beta": "oauth-2025-04-20",
+          Accept: "application/json",
+        },
       },
-    },
-    signal,
-  );
-  if (!result.ok) return failure(result.message, result.kind);
-  return success("anthropic", parseAnthropicUsage(result.data));
+      signal,
+    );
+
+    if (result.ok) {
+      const windows = parseAnthropicUsage(result.data);
+      recordClaudeSuccess(windows);
+      return success("anthropic", windows);
+    }
+
+    // Rate limit: back off exponentially and fall back to last-known-good.
+    if (result.kind === "http" && result.status === 429) {
+      const stale = recordClaudeRateLimit(
+        result.message,
+        result.retryAfterMs ?? null,
+      );
+      if (stale && stale.length > 0) return success("anthropic", stale);
+      return failure(result.message, "http");
+    }
+
+    return failure(result.message, result.kind);
+  }, signal);
 }
 
 export async function fetchCodexQuotasWithToken(

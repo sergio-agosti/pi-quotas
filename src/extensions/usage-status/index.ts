@@ -45,9 +45,14 @@ function getContextProvider(ctx: ExtensionContext | undefined): string | undefin
   }
 }
 
+// [local patch] Compact footer reset tag: "↺2d·1h·7m" rather than
+// " (↺in 2d 1h 7m)". It is glued straight onto the value with no space, so
+// "91%↺2h·19m" reads as one token and the " · " between windows is what
+// separates them. `formatTimeRemaining` is left alone because the /quotas
+// overlay uses it for its roomier "Resets in 2d 1h 7m" subtitle.
 function formatFooterResetTime(resetsAt: string): string {
   const remaining = formatTimeRemaining(new Date(resetsAt));
-  return remaining === "now" ? "now" : `in ${remaining}`;
+  return `↺${remaining.replaceAll(" ", "·")}`;
 }
 
 export function formatStatus(ctx: Pick<ExtensionContext, "ui">, windows: WindowStatus[]): string {
@@ -55,27 +60,17 @@ export function formatStatus(ctx: Pick<ExtensionContext, "ui">, windows: WindowS
   return windows
     .map((w) => {
       const core = formatWindowStatus(theme, w);
-      const reset = w.resetsAt ? theme.fg("dim", ` (↺${formatFooterResetTime(w.resetsAt)})`) : "";
+      const reset = w.resetsAt ? theme.fg("dim", formatFooterResetTime(w.resetsAt)) : "";
       return `${core}${reset}`;
     })
-    .join(" ");
+    // [local patch] " · " matches the token-cost footer's separator
+    .join(" · ");
 }
 
-const ANTHROPIC_SUBSCRIPTION_WINDOW_LABELS = new Set([
-  "5h",
-  "7d",
-  "7d Sonnet",
-  "7d Opus",
-  "7d Opus (legacy)",
-]);
-
-function shouldShowInStatus(window: QuotaWindow): boolean {
-  return !(
-    window.provider === "anthropic" &&
-    ANTHROPIC_SUBSCRIPTION_WINDOW_LABELS.has(window.label)
-  );
-}
-
+// [local patch] Anthropic subscription windows (5h / 7d / per-model) are
+// deliberately hidden upstream from the footer status line (commit aeb780e,
+// issue #2). This install re-enables them so Claude usage shows in the footer.
+// Re-applies with: cp ~/.pi/agent/extensions/pi-quotas-footer-patch/usage-status-index.ts <this file>
 export function toWindowStatus(window: QuotaWindow): WindowStatus {
   return {
     label: window.label,
@@ -90,7 +85,7 @@ export function toWindowStatus(window: QuotaWindow): WindowStatus {
 }
 
 export function toStatusWindows(windows: QuotaWindow[]): WindowStatus[] {
-  return windows.filter(shouldShowInStatus).map(toWindowStatus);
+  return windows.map(toWindowStatus);
 }
 
 export function formatStatusForFooter(

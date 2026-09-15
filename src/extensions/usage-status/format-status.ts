@@ -16,32 +16,49 @@ export interface ThemeLike {
   fg(color: string, text: string): string;
 }
 
+/**
+ * [local patch] Short footer tag per provider window, in the same style as the
+ * token-cost footer ("5h:", "wk:", "mo:"). Upstream's table mixed conventions
+ * ("5h Rolling", "7d-son", "budget", "premium") so the same window read
+ * differently depending on which provider was active.
+ *
+ * Unknown labels fall through to the raw label, so a new provider is never
+ * worse than before.
+ */
 const SHORT_LABELS: Record<string, string> = {
+  // Rolling / session windows
   "5h": "5h",
-  "7d": "7d",
-  "7d Sonnet": "7d-son",
-  "7d Opus": "7d-opus",
-  "7d Opus (legacy)": "7d-opus",
+  "5h Rolling": "5h",
+  "Requests / 5h": "5h",
+  "Search / hour": "hr",
+  "Daily": "day",
+  "Free Tool Calls / day": "day",
+  // Weekly windows
+  "7d": "wk",
+  "Weekly": "wk",
+  "Week (credits)": "wk",
+  "Credits / week": "wk",
+  "7d Sonnet": "wk-son",
+  "7d Opus": "wk-opus",
+  "7d Opus (legacy)": "wk-opus",
+  // Monthly windows
+  "Monthly": "mo",
+  "Monthly Budget": "mo",
+  "Web / month": "mo",
+  // GitHub Copilot grants three separate monthly allowances, so keep them
+  // distinct rather than printing "mo:" three times.
   "Premium / month": "premium",
   "Chat / month": "chat",
   "Completions / month": "comp",
+  // Balances, caps, and top-ups
+  "Credits": "bal",
+  "Credits Remaining": "bal",
   "Spend cap": "cap",
-  "Credits": "credits",
+  "On-demand": "ondemand",
   "Extra (AUD)": "extra",
   "Extra (USD)": "extra",
   "Extra (EUR)": "extra",
   "Extra (GBP)": "extra",
-  // OpenRouter labels
-  "Monthly Budget": "budget",
-  "Credits Remaining": "credits",
-  "Daily": "daily",
-  "Weekly": "weekly",
-  "Monthly": "monthly",
-  // Synthetic labels (match pi-synthetic extension)
-  "Credits / week": "week",
-  "Requests / 5h": "5h",
-  "Search / hour": "search",
-  "Free Tool Calls / day": "tools",
 };
 
 /**
@@ -58,10 +75,11 @@ function hasRealCounts(w: WindowStatus): boolean {
 /**
  * Format a single window for the footer status bar.
  *
- * - Colors both the label and value based on severity
- * - Uses used/limit for real counts (e.g. "7/300")
+ * - Prefixes the value with a short window tag ("5h:", "wk:")
+ * - Colors both the tag and value based on severity
+ * - Uses "N/M" for real counts (e.g. "7/300")
  * - Uses "$X/$Y" for currency windows
- * - Uses "N% left" for percentage-only windows
+ * - Uses "N%" (remaining) for windows with no real counts
  * - Uses "REACHED" / "OK" for spend cap
  */
 export function formatWindowStatus(theme: ThemeLike, w: WindowStatus): string {
@@ -99,7 +117,7 @@ export function formatWindowStatus(theme: ThemeLike, w: WindowStatus): string {
     valueText = theme.fg(color, `${remaining}/${w.limitValue}`);
   } else {
     const remaining = Math.max(0, Math.min(100, Math.round(100 - w.usedPercent)));
-    valueText = theme.fg(color, `${remaining}% left`);
+    valueText = theme.fg(color, `${remaining}%`);
   }
 
   const limitTag = w.limited ? theme.fg("error", " !") : "";

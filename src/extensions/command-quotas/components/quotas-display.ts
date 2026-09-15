@@ -184,12 +184,12 @@ export class QuotasComponent implements Component {
       } else if (window.limitValue <= 1 && window.label === "Spend cap") {
         usedStr = window.limited ? "REACHED" : "OK";
       } else if (window.limitValue > 0 && window.limitValue !== 100) {
-        // Real counts: show remaining/total (e.g. "293/300")
+        // [local patch] Real counts: show remaining/total (e.g. "293/300")
         const remaining = Math.max(0, Math.round(window.limitValue - window.usedValue));
-        usedStr = `${remaining}/${window.limitValue} left`;
+        usedStr = `${remaining}/${window.limitValue}`;
       } else {
         const remaining = Math.max(0, Math.min(100, Math.round(100 - window.usedPercent)));
-        usedStr = `${remaining}% left`;
+        usedStr = `${remaining}%`;
       }
 
       const bar = renderProgressBar(window.usedPercent, barWidth, this.theme, color, assessment.pacePercent);
