@@ -136,8 +136,9 @@ describe("formatWindowStatus", () => {
 
       const result = formatStatus({ ui: { theme } } as any, [status]);
 
-      // [local patch] compact tag: no parens, no "in", "·" between parts
-      expect(result).toContain("↺2h·19m");
+      // [local patch] no parens, no "in", "·" between parts, and a space on
+      // both sides of ↺
+      expect(result).toContain(" ↺ 2h·19m");
       expect(result).not.toContain("↺3h");
     }
   });
@@ -250,7 +251,7 @@ describe("formatWindowStatus", () => {
       ],
     );
 
-    expect(result).toContain("↺now");
+    expect(result).toContain(" ↺ now");
     expect(result).not.toContain("↺in");
   });
 });

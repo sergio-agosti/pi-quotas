@@ -45,14 +45,14 @@ function getContextProvider(ctx: ExtensionContext | undefined): string | undefin
   }
 }
 
-// [local patch] Compact footer reset tag: "↺2d·1h·7m" rather than
-// " (↺in 2d 1h 7m)". It is glued straight onto the value with no space, so
-// "91%↺2h·19m" reads as one token and the " · " between windows is what
-// separates them. `formatTimeRemaining` is left alone because the /quotas
-// overlay uses it for its roomier "Resets in 2d 1h 7m" subtitle.
+// [local patch] Footer reset tag: " ↺ 2d·1h·7m" rather than
+// " (↺in 2d 1h 7m)". The "↺" is set off with a space on both sides so it does
+// not weld onto the value, and the " · " between windows still separates
+// them. `formatTimeRemaining` is left alone because the /quotas overlay uses
+// it for its roomier "Resets in 2d 1h 7m" subtitle.
 function formatFooterResetTime(resetsAt: string): string {
   const remaining = formatTimeRemaining(new Date(resetsAt));
-  return `↺${remaining.replaceAll(" ", "·")}`;
+  return ` ↺ ${remaining.replaceAll(" ", "·")}`;
 }
 
 export function formatStatus(ctx: Pick<ExtensionContext, "ui">, windows: WindowStatus[]): string {
