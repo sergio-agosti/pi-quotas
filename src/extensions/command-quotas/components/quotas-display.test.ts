@@ -83,7 +83,9 @@ describe("QuotasComponent", () => {
 
     const output = component.render(70).join("\n");
 
-    expect(output).toContain("51/300 left");
+    // [local patch] the " left" suffix was dropped from the overlay
+    expect(output).toContain("51/300");
+    expect(output).not.toContain("left");
     expect(output).not.toContain(`${ansi.accent}|`);
 
     vi.useRealTimers();

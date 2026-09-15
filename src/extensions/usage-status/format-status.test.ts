@@ -43,7 +43,9 @@ describe("formatWindowStatus", () => {
       limitValue: 100,
     };
     const result = formatWindowStatus(theme, w);
-    expect(result).toContain("91% left");
+    expect(result).toContain("91%");
+    // [local patch] the " left" suffix was dropped from footer values
+    expect(result).not.toContain("left");
     expect(result).toContain("[success]");
   });
 
@@ -90,8 +92,9 @@ describe("formatWindowStatus", () => {
     };
     const result = formatWindowStatus(theme, w);
     // label should be colored with error (high maps to error)
-    expect(result).toContain("[error]7d:");
-    expect(result).toContain("15% left");
+    // [local patch] "7d" is tagged "wk" in the unified short-label scheme
+    expect(result).toContain("[error]wk:");
+    expect(result).toContain("15%");
   });
 
   it("keeps label dim when severity is none", () => {
@@ -133,8 +136,9 @@ describe("formatWindowStatus", () => {
 
       const result = formatStatus({ ui: { theme } } as any, [status]);
 
-      expect(result).toContain("(↺in 2h 19m)");
-      expect(result).not.toContain("(↺in 3h)");
+      // [local patch] compact tag: no parens, no "in", "·" between parts
+      expect(result).toContain("↺2h·19m");
+      expect(result).not.toContain("↺3h");
     }
   });
 
@@ -187,7 +191,7 @@ describe("formatWindowStatus", () => {
     expect(formatStatusForFooter({ ui: { theme } } as any, [])).toBeUndefined();
   });
 
-  it("filters Anthropic subscription windows from footer status while keeping extra usage", () => {
+  it("keeps Anthropic subscription windows in footer status alongside extra usage", () => {
     const windows = toStatusWindows([
       {
         provider: "anthropic",
@@ -219,8 +223,12 @@ describe("formatWindowStatus", () => {
       },
     ]);
 
-    expect(windows).toHaveLength(1);
-    expect(windows[0]).toMatchObject({ label: "Extra (USD)" });
+    // [local patch] upstream drops these from the footer (commit aeb780e, issue #2)
+    expect(windows.map((w) => w.label)).toEqual([
+      "5h",
+      "7d Sonnet",
+      "Extra (USD)",
+    ]);
   });
 
   it("does not prefix elapsed reset times with in", () => {
@@ -242,7 +250,7 @@ describe("formatWindowStatus", () => {
       ],
     );
 
-    expect(result).toContain("(↺now)");
-    expect(result).not.toContain("(↺in now)");
+    expect(result).toContain("↺now");
+    expect(result).not.toContain("↺in");
   });
 });
