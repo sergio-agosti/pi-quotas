@@ -255,3 +255,59 @@ describe("formatWindowStatus", () => {
     expect(result).not.toContain("↺in");
   });
 });
+
+// [local patch] Anthropic reports per-model weekly limits in limits[] as
+// "weekly_scoped" entries (scope.model.display_name). The footer folds them onto
+// the global weekly bar as "85%/93%" instead of spending a slot each.
+describe("model-scoped weekly windows", () => {
+  // Passthrough theme: these assertions are about structure, not colour.
+  const plain = { fg: (_color: string, text: string) => text } as any;
+
+  function render(entries: Array<[string, number]>): string {
+    return formatStatus(
+      { ui: { theme: plain } } as any,
+      toStatusWindows(
+        entries.map(([label, usedPercent]) => ({
+          provider: "anthropic" as const,
+          label,
+          usedPercent,
+          // Sentinel date keeps the reset suffix out of the expected strings.
+          resetsAt: new Date(0),
+          windowSeconds: 7 * 24 * 60 * 60,
+          usedValue: usedPercent,
+          limitValue: 100,
+          showPace: false,
+          nextLabel: "Resets",
+        })),
+      ),
+    );
+  }
+
+  it("folds a scoped weekly window onto the global weekly bar", () => {
+    expect(render([["5h", 1], ["7d", 15], ["7d Fable", 7]])).toBe(
+      "5h:99% · wk:85%/93%",
+    );
+  });
+
+  it("chains several scoped models in payload order", () => {
+    expect(render([["7d", 15], ["7d Fable", 7], ["7d Giraffe", 61]])).toBe(
+      "wk:85%/93%/39%",
+    );
+  });
+
+  it("leaves the global weekly bar alone when nothing is scoped", () => {
+    expect(render([["5h", 1], ["7d", 15]])).toBe("5h:99% · wk:85%");
+  });
+
+  it("keeps legacy per-model rows separate instead of folding them", () => {
+    expect(render([["7d", 31], ["7d Sonnet", 8]])).toBe("wk:69% · wk-son:92%");
+  });
+
+  it("falls back to a labelled standalone entry when there is no global weekly bar", () => {
+    expect(render([["5h", 1], ["7d Fable", 7]])).toBe("5h:99% · fable:93%");
+  });
+
+  it("renders a spent scoped budget as 0% rather than dropping it", () => {
+    expect(render([["7d", 15], ["7d Fable", 100]])).toBe("wk:85%/0%");
+  });
+});

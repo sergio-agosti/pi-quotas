@@ -81,6 +81,79 @@ describe("parseAnthropicUsage", () => {
     expect(opus).toMatchObject({ usedPercent: 23 });
   });
 
+  it("maps the newer limits array, including model-scoped windows", () => {
+    const windows = parseAnthropicUsage({
+      limits: [
+        { kind: "session", percent: 4, resets_at: "2026-09-16T00:50:00Z" },
+        { kind: "weekly_all", percent: 15, resets_at: "2026-09-20T18:00:00Z" },
+        {
+          kind: "weekly_scoped",
+          percent: 7,
+          resets_at: "2026-09-20T18:00:00Z",
+          scope: { model: { display_name: "Fable" } },
+        },
+      ],
+    });
+
+    expect(windows.map((w) => w.label)).toEqual(["5h", "7d", "7d Fable"]);
+    expect(windows[2]).toMatchObject({
+      provider: "anthropic",
+      usedPercent: 7,
+      windowSeconds: 7 * 24 * 60 * 60,
+    });
+    expect(windows[2]?.resetsAt.toISOString()).toBe("2026-09-20T18:00:00.000Z");
+  });
+
+  it("falls back to the scoped surface name and ignores unknown limit kinds", () => {
+    const windows = parseAnthropicUsage({
+      limits: [
+        { kind: "weekly_scoped", percent: 40, scope: { surface: "claude.ai" } },
+        { kind: "spend", percent: 10 },
+      ],
+    });
+
+    expect(windows.map((w) => w.label)).toEqual(["7d claude.ai"]);
+  });
+
+  it("keeps a scoped window at a real zero but skips limits with no percentage", () => {
+    const windows = parseAnthropicUsage({
+      limits: [
+        {
+          kind: "weekly_scoped",
+          percent: 0,
+          scope: { model: { display_name: "Fable" } },
+        },
+        {
+          kind: "weekly_scoped",
+          percent: null,
+          scope: { model: { display_name: "Giraffe" } },
+        },
+        { kind: "weekly_all", percent: "n/a" },
+        null,
+      ],
+    });
+
+    expect(windows.map((w) => w.label)).toEqual(["7d Fable"]);
+    expect(windows[0]?.usedPercent).toBe(0);
+  });
+
+  it("does not double up when legacy fields and limits describe the same windows", () => {
+    const windows = parseAnthropicUsage({
+      five_hour: { utilization: 9, resets_at: "2026-04-22T09:00:00Z" },
+      seven_day: { utilization: 31, resets_at: "2026-04-23T23:00:00Z" },
+      limits: [
+        { kind: "session", percent: 9 },
+        { kind: "weekly_all", percent: 31 },
+      ],
+    });
+
+    expect(windows.map((w) => w.label)).toEqual(["5h", "7d"]);
+  });
+
+  it("ignores a limits value that is not an array", () => {
+    expect(parseAnthropicUsage({ limits: null })).toEqual([]);
+  });
+
   it("skips extra_usage when disabled", () => {
     const windows = parseAnthropicUsage({
       five_hour: { utilization: 5, resets_at: "2026-04-22T09:00:00Z" },

@@ -23,9 +23,15 @@ import {
 import {
   assessWindow,
   formatTimeRemaining,
+  getSeverityColor,
 } from "../../utils/quotas-severity.js";
 import type { QuotaWindow } from "../../types/quotas.js";
-import { formatWindowStatus, type WindowStatus } from "./format-status.js";
+import {
+  formatWindowStatus,
+  remainingPercent,
+  type ThemeLike,
+  type WindowStatus,
+} from "./format-status.js";
 
 const EXTENSION_ID = "pi-quotas-usage";
 const REFRESH_INTERVAL_MS = 60_000;
@@ -45,6 +51,43 @@ function getContextProvider(ctx: ExtensionContext | undefined): string | undefin
   }
 }
 
+// [local patch] Anthropic model-scoped weekly windows ("7d Fable"), i.e. the
+// new-style limits[].weekly_scoped entries. The legacy per-model keys
+// (seven_day_sonnet / seven_day_opus) keep their own footer rows, since those
+// labels are what identifies them.
+const SCOPED_WEEKLY_LABEL = /^7d (.+)$/;
+const LEGACY_MODEL_LABELS = new Set([
+  "7d Sonnet",
+  "7d Opus",
+  "7d Opus (legacy)",
+]);
+
+function isScopedWeekly(w: WindowStatus): boolean {
+  return SCOPED_WEEKLY_LABEL.test(w.label) && !LEGACY_MODEL_LABELS.has(w.label);
+}
+
+/**
+ * [local patch] Render scoped weekly windows as a suffix on the all-models
+ * weekly bar, slash-separated and unlabelled: "85%/93%" — global, then the
+ * scoped model. Both answer the same question (how much is left) but each is
+ * measured against its own allowance, so neither is rescaled; the order is
+ * fixed (payload order: global first, then each scoped window) and each number
+ * keeps its own severity colour. With more than one scoped model this becomes
+ * a bare chain ("85%/93%/39%"), which is a deliberate trade for the compact
+ * form — see the README for the labelled fallback if a second scoped model
+ * ever shows up.
+ */
+function scopedInlineStatus(
+  theme: ThemeLike,
+  scoped: WindowStatus[],
+): string {
+  const separator = theme.fg("dim", "/");
+  const values = scoped.map((w) =>
+    theme.fg(getSeverityColor(w.severity), `${remainingPercent(w)}%`),
+  );
+  return `${separator}${values.join(separator)}`;
+}
+
 // [local patch] Footer reset tag: " ↺ 2d·1h·7m" rather than
 // " (↺in 2d 1h 7m)". The "↺" is set off with a space on both sides so it does
 // not weld onto the value, and the " · " between windows still separates
@@ -57,11 +100,28 @@ function formatFooterResetTime(resetsAt: string): string {
 
 export function formatStatus(ctx: Pick<ExtensionContext, "ui">, windows: WindowStatus[]): string {
   const theme = ctx.ui.theme;
-  return windows
-    .map((w) => {
+
+  // [local patch] Anthropic model-scoped weekly windows ("7d Fable") are
+  // folded into the all-models weekly bar as an inline percentage rather than
+  // taking a footer slot of their own: "wk: 85%/93%" — global left, then
+  // Fable left. Fable has its own, smaller weekly allowance, so the percentage
+  // left differs from the global one and a bare "wk:" row would hide it. The
+  // scoped number stays its own row in the /quotas overlay, which has the space
+  // to label it.
+  const scoped = windows.filter(isScopedWeekly);
+  const rest = windows.filter((w) => !isScopedWeekly(w));
+  // Falls back to standalone scoped entries when there is no base weekly bar.
+  const baseIndex = scoped.length
+    ? rest.findIndex((w) => w.label === "7d" || w.label === "Weekly")
+    : -1;
+  if (scoped.length && baseIndex === -1) rest.push(...scoped);
+  const inline = baseIndex === -1 ? "" : scopedInlineStatus(theme, scoped);
+
+  return rest
+    .map((w, index) => {
       const core = formatWindowStatus(theme, w);
       const reset = w.resetsAt ? theme.fg("dim", formatFooterResetTime(w.resetsAt)) : "";
-      return `${core}${reset}`;
+      return `${core}${index === baseIndex ? inline : ""}${reset}`;
     })
     // [local patch] " · " matches the token-cost footer's separator
     .join(" · ");

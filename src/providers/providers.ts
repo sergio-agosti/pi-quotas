@@ -73,6 +73,56 @@ export function parseAnthropicUsage(data: any): QuotaWindow[] {
     }
   }
 
+  // [local patch] Model-scoped windows from the newer `limits` array.
+  //
+  // The legacy `seven_day_sonnet` / `seven_day_omelette` / `seven_day_opus`
+  // fields are now permanently null on the Anthropic oauth usage endpoint, and
+  // the per-model weekly allowance moved into `limits[]` as a `weekly_scoped`
+  // entry keyed by model display name. Claude Fable has its own weekly
+  // percentage that differs from `weekly_all`, and without this the footer only
+  // ever shows the all-models weekly bar. Legacy fields are still parsed above
+  // for older accounts; labels already collected are skipped so the two shapes
+  // cannot double up.
+  const seenLabels = new Set(windows.map((w) => w.label));
+  for (const limit of Array.isArray(data?.limits) ? data.limits : []) {
+    // typeof check, not just isFinite: Number(null) is 0, which would turn an
+    // empty limit into a bogus 0%-used window. A real 0 is still valid (the
+    // scoped model simply hasn't been used this week).
+    const usedPercent = limit?.percent;
+    if (typeof usedPercent !== "number" || !Number.isFinite(usedPercent)) {
+      continue;
+    }
+    let label: string;
+    let windowSeconds: number;
+    if (limit?.kind === "session") {
+      label = "5h";
+      windowSeconds = 5 * 60 * 60;
+    } else if (limit?.kind === "weekly_all") {
+      label = "7d";
+      windowSeconds = 7 * 24 * 60 * 60;
+    } else if (limit?.kind === "weekly_scoped") {
+      const name =
+        limit?.scope?.model?.display_name ?? limit?.scope?.surface ?? "Scoped";
+      label = `7d ${name}`;
+      windowSeconds = 7 * 24 * 60 * 60;
+    } else {
+      continue;
+    }
+    if (seenLabels.has(label)) continue;
+    seenLabels.add(label);
+    windows.push({
+      provider: "anthropic",
+      label,
+      usedPercent,
+      resetsAt: parseDateish(limit.resets_at),
+      windowSeconds,
+      usedValue: usedPercent,
+      limitValue: 100,
+      showPace: false,
+      nextLabel: "Resets",
+    });
+  }
+
   // Extra usage (overage budget)
   const extra = data?.extra_usage;
   if (extra && extra.is_enabled && extra.monthly_limit > 0) {

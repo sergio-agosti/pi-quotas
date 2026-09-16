@@ -41,6 +41,10 @@ const SHORT_LABELS: Record<string, string> = {
   "7d Sonnet": "wk-son",
   "7d Opus": "wk-opus",
   "7d Opus (legacy)": "wk-opus",
+  // [local patch] Anthropic reports per-model weekly limits as "7d <Model>"
+  // (from limits[].scope.model.display_name); they are tagged with the model
+  // name itself via windowShortLabel(), so there is no abbreviation table entry
+  // to keep in sync here.
   // Monthly windows
   "Monthly": "mo",
   "Monthly Budget": "mo",
@@ -60,6 +64,28 @@ const SHORT_LABELS: Record<string, string> = {
   "Extra (EUR)": "extra",
   "Extra (GBP)": "extra",
 };
+
+/**
+ * [local patch] Resolve a window label to its footer tag. Anthropic's
+ * model-scoped weekly windows ("7d Fable") are tagged with the model's own
+ * name rather than an abbreviation, so there is nothing to decode; unknown
+ * labels fall through to the raw label.
+ */
+export function windowShortLabel(label: string): string {
+  const known = SHORT_LABELS[label];
+  if (known) return known;
+  const scoped = /^7d (.+)$/.exec(label);
+  if (scoped) return scoped[1].toLowerCase();
+  return label;
+}
+
+/**
+ * [local patch] Remaining percentage for percentage-only windows, shared by
+ * formatWindowStatus and the inline model-scoped suffix.
+ */
+export function remainingPercent(w: WindowStatus): number {
+  return Math.max(0, Math.min(100, Math.round(100 - w.usedPercent)));
+}
 
 /**
  * Returns true when a window has a real used/limit pair
@@ -83,7 +109,7 @@ function hasRealCounts(w: WindowStatus): boolean {
  * - Uses "REACHED" / "OK" for spend cap
  */
 export function formatWindowStatus(theme: ThemeLike, w: WindowStatus): string {
-  const short = SHORT_LABELS[w.label] ?? w.label;
+  const short = windowShortLabel(w.label);
   const color = getSeverityColor(w.severity);
 
   // Color the label based on severity: dim when safe, colored when at risk
@@ -101,8 +127,7 @@ export function formatWindowStatus(theme: ThemeLike, w: WindowStatus): string {
   let valueText: string;
   if (isSynthetic) {
     // Compact format matching pi-synthetic: just remaining%
-    const remaining = Math.max(0, Math.min(100, Math.round(100 - w.usedPercent)));
-    valueText = theme.fg(color, `${remaining}%`);
+    valueText = theme.fg(color, `${remainingPercent(w)}%`);
   } else if (w.label === "Spend cap") {
     valueText = theme.fg(color, w.limited ? "REACHED" : "OK");
   } else if (w.isCurrency && w.usedValue != null && w.limitValue != null) {
@@ -116,8 +141,7 @@ export function formatWindowStatus(theme: ThemeLike, w: WindowStatus): string {
     const remaining = Math.max(0, Math.round(w.limitValue! - w.usedValue!));
     valueText = theme.fg(color, `${remaining}/${w.limitValue}`);
   } else {
-    const remaining = Math.max(0, Math.min(100, Math.round(100 - w.usedPercent)));
-    valueText = theme.fg(color, `${remaining}%`);
+    valueText = theme.fg(color, `${remainingPercent(w)}%`);
   }
 
   const limitTag = w.limited ? theme.fg("error", " !") : "";
