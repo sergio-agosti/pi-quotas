@@ -28,11 +28,20 @@ import type { QuotaWindow } from "../types/quotas.js";
  *     footer keeps showing Claude usage instead of erroring.
  */
 
-export const CLAUDE_CACHE_FILE = join(
-  tmpdir(),
-  "pi",
-  "pi-quotas-claude-cache.json",
-);
+/**
+ * Path to the shared last-known-good cache.
+ *
+ * Overridable via PI_QUOTAS_CLAUDE_CACHE_FILE so tests can isolate themselves
+ * from the real cache: this file is shared with every other Pi process on the
+ * machine, so a running Pi (or an earlier test) writing it would otherwise
+ * decide what the fetch tests see.
+ */
+export function claudeCacheFile(): string {
+  return (
+    process.env.PI_QUOTAS_CLAUDE_CACHE_FILE ??
+    join(tmpdir(), "pi", "pi-quotas-claude-cache.json")
+  );
+}
 
 const CLAUDE_SHARED_FRESH_TTL_MS = 2 * 60 * 1000;
 const CLAUDE_BASE_BACKOFF_MS = 2 * 60 * 1000;
@@ -68,7 +77,7 @@ function deserializeWindows(list: SerializableWindow[]): QuotaWindow[] {
 function readCacheFile(): ClaudeCacheFile {
   try {
     const parsed = JSON.parse(
-      readFileSync(CLAUDE_CACHE_FILE, "utf8"),
+      readFileSync(claudeCacheFile(), "utf8"),
     ) as ClaudeCacheFile;
     if (parsed?.version === 1) return parsed;
   } catch {
@@ -83,16 +92,17 @@ function readClaudeCache(): ClaudeCacheState {
 
 function writeClaudeCache(state: ClaudeCacheState): boolean {
   try {
-    const directory = dirname(CLAUDE_CACHE_FILE);
+    const file = claudeCacheFile();
+    const directory = dirname(file);
     if (!existsSync(directory))
       mkdirSync(directory, { recursive: true, mode: 0o700 });
     const cache = readCacheFile();
     cache.claude = state;
-    const temporaryPath = `${CLAUDE_CACHE_FILE}.tmp-${process.pid}-${Date.now()}`;
+    const temporaryPath = `${file}.tmp-${process.pid}-${Date.now()}`;
     writeFileSync(temporaryPath, JSON.stringify(cache, null, 2), {
       mode: 0o600,
     });
-    renameSync(temporaryPath, CLAUDE_CACHE_FILE);
+    renameSync(temporaryPath, file);
     return true;
   } catch {
     return false;
@@ -198,10 +208,11 @@ function safeUnlink(filePath: string): void {
 async function acquireFileLock(
   signal?: AbortSignal,
 ): Promise<(() => void) | null> {
-  const directory = dirname(CLAUDE_CACHE_FILE);
+  const file = claudeCacheFile();
+  const directory = dirname(file);
   if (!existsSync(directory))
     mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const lockFile = `${CLAUDE_CACHE_FILE}.lock`;
+  const lockFile = `${file}.lock`;
   const startedAt = Date.now();
 
   while (Date.now() - startedAt <= CLAUDE_LOCK_WAIT_MS) {

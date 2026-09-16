@@ -1,5 +1,8 @@
 import { AuthStorage } from "@mariozechner/pi-coding-agent";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchAnthropicQuotasWithToken,
   fetchCodexQuotasWithToken,
@@ -20,6 +23,22 @@ afterEach(() => {
 });
 
 describe("fetchAnthropicQuotasWithToken", () => {
+  // The Anthropic path keeps a last-known-good cache in a file shared with
+  // other Pi processes (and with a Pi running on this machine). Point it at a
+  // throwaway file so these tests never read a real cache instead of their
+  // mocked response.
+  let cacheDir: string;
+
+  beforeEach(() => {
+    cacheDir = mkdtempSync(join(tmpdir(), "pi-quotas-test-"));
+    process.env.PI_QUOTAS_CLAUDE_CACHE_FILE = join(cacheDir, "cache.json");
+  });
+
+  afterEach(() => {
+    delete process.env.PI_QUOTAS_CLAUDE_CACHE_FILE;
+    rmSync(cacheDir, { recursive: true, force: true });
+  });
+
   it("returns config error when token missing", async () => {
     const result = await fetchAnthropicQuotasWithToken(undefined);
     expect(result).toMatchObject({
