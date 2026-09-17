@@ -26,6 +26,10 @@ import type { QuotaWindow } from "../types/quotas.js";
  *   - applies an exponential backoff/cooldown after 429s, and
  *   - falls back to the last-known-good windows during a cooldown so the
  *     footer keeps showing Claude usage instead of erroring.
+ *
+ * Because the file is shared across processes that may run *different builds*
+ * of this extension, cached windows are stamped with CLAUDE_PARSER_VERSION and
+ * only reused by a matching parser.
  */
 
 /**
@@ -43,6 +47,25 @@ export function claudeCacheFile(): string {
   );
 }
 
+/**
+ * Identity of the parser that produced the cached windows.
+ *
+ * The cache stores *parsed* windows and is shared by every Pi process on the
+ * machine, including long-running sessions that loaded an older build of this
+ * extension (extensions are loaded once at process start). An older parser
+ * writes a window set this build would not produce — e.g. before model-scoped
+ * weekly limits were read from `limits[]`, its successful poll overwrote the
+ * cache with `5h` + `7d` only, and every newer process then rendered a footer
+ * with the scoped "7d Fable" window missing for up to the shared TTL (or the
+ * whole 429 cooldown).
+ *
+ * Entries are stamped with this version and a mismatch is treated as a cache
+ * miss for *reads*, so version skew can only cost an extra fetch, never a
+ * silently degraded footer. Bump it whenever parseAnthropicUsage starts
+ * producing a different set of windows for the same payload.
+ */
+const CLAUDE_PARSER_VERSION = 2;
+
 const CLAUDE_SHARED_FRESH_TTL_MS = 2 * 60 * 1000;
 const CLAUDE_BASE_BACKOFF_MS = 2 * 60 * 1000;
 const CLAUDE_MAX_BACKOFF_MS = 30 * 60 * 1000;
@@ -55,6 +78,8 @@ interface SerializableWindow extends Omit<QuotaWindow, "resetsAt"> {
 
 interface ClaudeCacheState {
   windows?: SerializableWindow[];
+  /** Parser that produced `windows`; see CLAUDE_PARSER_VERSION. */
+  parserVersion?: number;
   fetchedAt?: number;
   cooldownUntil?: number;
   consecutive429s?: number;
@@ -88,6 +113,17 @@ function readCacheFile(): ClaudeCacheFile {
 
 function readClaudeCache(): ClaudeCacheState {
   return readCacheFile().claude ?? {};
+}
+
+/**
+ * Windows from another parser version are unusable: they may be missing
+ * windows this build knows how to show. The rate-limit bookkeeping
+ * (cooldownUntil / consecutive429s) stays valid regardless of parser version,
+ * since it describes the endpoint, not the payload shape.
+ */
+function usableWindows(state: ClaudeCacheState): SerializableWindow[] | undefined {
+  if (!state.windows) return undefined;
+  return state.parserVersion === CLAUDE_PARSER_VERSION ? state.windows : undefined;
 }
 
 function writeClaudeCache(state: ClaudeCacheState): boolean {
@@ -146,20 +182,21 @@ export function readClaudeCacheOutcome(
   nowMs = Date.now(),
 ): ClaudeCacheOutcome | null {
   const state = readClaudeCache();
+  const windows = usableWindows(state);
   if (state.cooldownUntil && state.cooldownUntil > nowMs) {
     const warning = cooldownMessage(state.cooldownUntil, nowMs);
     return {
-      windows: state.windows ? deserializeWindows(state.windows) : [],
+      windows: windows ? deserializeWindows(windows) : [],
       stale: true,
       warning,
     };
   }
   if (
-    state.windows &&
+    windows &&
     state.fetchedAt &&
     nowMs - state.fetchedAt <= CLAUDE_SHARED_FRESH_TTL_MS
   ) {
-    return { windows: deserializeWindows(state.windows), stale: false };
+    return { windows: deserializeWindows(windows), stale: false };
   }
   return null;
 }
@@ -171,6 +208,7 @@ export function recordClaudeSuccess(
 ): void {
   writeClaudeCache({
     windows: serializeWindows(windows),
+    parserVersion: CLAUDE_PARSER_VERSION,
     fetchedAt: nowMs,
     cooldownUntil: undefined,
     consecutive429s: 0,
@@ -194,7 +232,8 @@ export function recordClaudeRateLimit(
     consecutive429s,
     lastError: message,
   });
-  return state.windows ? deserializeWindows(state.windows) : null;
+  const windows = usableWindows(state);
+  return windows ? deserializeWindows(windows) : null;
 }
 
 function safeUnlink(filePath: string): void {
