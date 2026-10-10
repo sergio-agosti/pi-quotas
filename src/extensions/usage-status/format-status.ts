@@ -1,5 +1,8 @@
 import type { RiskSeverity } from "../../utils/quotas-severity.js";
-import { getSeverityColor } from "../../utils/quotas-severity.js";
+import {
+  formatTimeRemaining,
+  getSeverityColor,
+} from "../../utils/quotas-severity.js";
 
 export type WindowStatus = {
   label: string;
@@ -10,6 +13,11 @@ export type WindowStatus = {
   isCurrency?: boolean;
   usedValue?: number;
   limitValue?: number;
+  /**
+   * Window duration. 0 for windows that are not time-based (balances, spend
+   * caps), which is the signal windowKind() uses to tell them apart.
+   */
+  windowSeconds: number;
 };
 
 export interface ThemeLike {
@@ -66,6 +74,17 @@ const SHORT_LABELS: Record<string, string> = {
 };
 
 /**
+ * Synthetic windows always use the compact "remaining%" format to match the
+ * pi-synthetic extension display, rather than the count/currency forms.
+ */
+const SYNTHETIC_LABELS = new Set([
+  "Credits / week",
+  "Requests / 5h",
+  "Search / hour",
+  "Free Tool Calls / day",
+]);
+
+/**
  * [local patch] Resolve a window label to its footer tag. Anthropic's
  * model-scoped weekly windows ("7d Fable") are tagged with the model's own
  * name rather than an abbreviation, so there is nothing to decode; unknown
@@ -87,6 +106,20 @@ export function remainingPercent(w: WindowStatus): number {
   return Math.max(0, Math.min(100, Math.round(100 - w.usedPercent)));
 }
 
+// [local patch] Footer reset tag: " ↺ 2d·1h·7m" rather than
+// " (↺in 2d 1h 7m)". The "↺" is set off with a space on both sides so it does
+// not weld onto the value, and the " · " between windows still separates
+// them. `formatTimeRemaining` is left alone because the /quotas overlay uses
+// it for its roomier "Resets in 2d 1h 7m" subtitle.
+//
+// Exported so the event-bus feed can publish the same suffix the footer
+// appends, rather than a consumer re-deriving the duration format and
+// drifting from it.
+export function formatFooterResetTime(resetsAt: string): string {
+  const remaining = formatTimeRemaining(new Date(resetsAt));
+  return ` ↺ ${remaining.replaceAll(" ", "·")}`;
+}
+
 /**
  * Returns true when a window has a real used/limit pair
  * (e.g. 293/300 premium requests) rather than just a percentage.
@@ -96,6 +129,54 @@ function hasRealCounts(w: WindowStatus): boolean {
   // Percentage-only windows store limitValue=100 and usedValue=usedPercent
   if (w.limitValue === 100 && Math.abs(w.usedValue - w.usedPercent) < 0.01) return false;
   return w.limitValue > 0;
+}
+
+export interface WindowValue {
+  /** The value exactly as the footer prints it, without colour. */
+  text: string;
+  /**
+   * Remaining percent, when a bar is a meaningful representation of this
+   * window. Null where the printed value is not a percentage of an allowance —
+   * balances, spend caps, and used/limit pairs — because a bar drawn beside a
+   * number it does not measure reads as a contradiction.
+   */
+  barPercent: number | null;
+}
+
+/**
+ * The value half of a window's footer text, and whether it can be drawn as a
+ * bar.
+ *
+ * Split out from formatWindowStatus so the event-bus feed can publish the same
+ * value the footer shows without duplicating this branch structure or
+ * re-parsing rendered ANSI. A count pair prints remaining/limit while a
+ * currency pair prints used/limit, so "bar length equals the number shown"
+ * cannot hold for both; only the percentage forms get a bar.
+ */
+export function formatWindowValue(w: WindowStatus): WindowValue {
+  if (SYNTHETIC_LABELS.has(w.label)) {
+    const remaining = remainingPercent(w);
+    return { text: `${remaining}%`, barPercent: remaining };
+  }
+  if (w.label === "Spend cap") {
+    return { text: w.limited ? "REACHED" : "OK", barPercent: null };
+  }
+  if (w.isCurrency && w.usedValue != null && w.limitValue != null) {
+    // Tracking-only windows have limitValue=0, show just usage
+    return {
+      text:
+        w.limitValue === 0
+          ? `$${w.usedValue.toFixed(2)} used`
+          : `$${w.usedValue.toFixed(2)}/$${w.limitValue.toFixed(2)}`,
+      barPercent: null,
+    };
+  }
+  if (hasRealCounts(w)) {
+    const remaining = Math.max(0, Math.round(w.limitValue! - w.usedValue!));
+    return { text: `${remaining}/${w.limitValue}`, barPercent: null };
+  }
+  const remaining = remainingPercent(w);
+  return { text: `${remaining}%`, barPercent: remaining };
 }
 
 /**
@@ -116,33 +197,7 @@ export function formatWindowStatus(theme: ThemeLike, w: WindowStatus): string {
   const isAtRisk = w.severity !== "none";
   const labelColor = isAtRisk ? color : "dim";
   const labelText = theme.fg(labelColor, `${short}:`);
-
-  // Synthetic windows always use compact "remaining%" format
-  // to match the pi-synthetic extension display
-  const SYNTHETIC_LABELS = new Set([
-    "Credits / week", "Requests / 5h", "Search / hour", "Free Tool Calls / day",
-  ]);
-  const isSynthetic = SYNTHETIC_LABELS.has(w.label);
-
-  let valueText: string;
-  if (isSynthetic) {
-    // Compact format matching pi-synthetic: just remaining%
-    valueText = theme.fg(color, `${remainingPercent(w)}%`);
-  } else if (w.label === "Spend cap") {
-    valueText = theme.fg(color, w.limited ? "REACHED" : "OK");
-  } else if (w.isCurrency && w.usedValue != null && w.limitValue != null) {
-    // Tracking-only windows have limitValue=0, show just usage
-    if (w.limitValue === 0) {
-      valueText = theme.fg(color, `$${w.usedValue.toFixed(2)} used`);
-    } else {
-      valueText = theme.fg(color, `$${w.usedValue.toFixed(2)}/$${w.limitValue.toFixed(2)}`);
-    }
-  } else if (hasRealCounts(w)) {
-    const remaining = Math.max(0, Math.round(w.limitValue! - w.usedValue!));
-    valueText = theme.fg(color, `${remaining}/${w.limitValue}`);
-  } else {
-    valueText = theme.fg(color, `${remainingPercent(w)}%`);
-  }
+  const valueText = theme.fg(color, formatWindowValue(w).text);
 
   const limitTag = w.limited ? theme.fg("error", " !") : "";
   return `${labelText}${valueText}${limitTag}`;

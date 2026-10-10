@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import usageStatusExtension from "./index.js";
 import { fetchProviderQuotas } from "../../lib/quotas.js";
+import { assessWindow } from "../../utils/quotas-severity.js";
+import { QUOTAS_USAGE_UPDATED_EVENT, type QuotasUsagePayload } from "./feed.js";
 
 vi.mock("../../config.js", () => ({
   QUOTAS_CONFIG_UPDATED_EVENT: "quotas:config:updated",
@@ -178,5 +180,107 @@ describe("usage-status extension lifecycle", () => {
     const last = calls[calls.length - 1]?.[1];
     expect(last).toBeUndefined();
     expect(calls.some((c) => c[1] === "usage unavailable")).toBe(false);
+  });
+});
+
+// [local patch] The structured feed on the event bus, so a consumer can draw
+// this data instead of parsing the footer text back out of it.
+describe("usage feed", () => {
+  const HOUR = 60 * 60;
+  const DAY = 24 * HOUR;
+
+  function quotaWindow(label: string, usedPercent: number, windowSeconds: number) {
+    return {
+      provider: "anthropic" as const,
+      label,
+      usedPercent,
+      // A past reset makes the pace projection deterministic: the window reads
+      // as fully elapsed, so severity depends only on the percentage.
+      resetsAt: new Date("2026-05-06T07:47:37Z"),
+      windowSeconds,
+      usedValue: usedPercent,
+      limitValue: 100,
+    };
+  }
+
+  function collect(pi: ExtensionAPI): QuotasUsagePayload[] {
+    const payloads: QuotasUsagePayload[] = [];
+    pi.events.on(QUOTAS_USAGE_UPDATED_EVENT, (data) => {
+      payloads.push(data as QuotasUsagePayload);
+    });
+    return payloads;
+  }
+
+  it("publishes the footer's data in structured form", async () => {
+    const windows = [
+      quotaWindow("5h", 66, 5 * HOUR),
+      quotaWindow("7d Fable", 7, 7 * DAY),
+    ];
+    vi.mocked(fetchProviderQuotas).mockResolvedValueOnce({
+      success: true,
+      data: { provider: "anthropic", windows },
+    } as any);
+
+    const { pi, emitExtensionEvent } = createFakePi();
+    const payloads = collect(pi);
+    const { ctx } = createContext("anthropic");
+
+    await usageStatusExtension(pi);
+    await emitExtensionEvent("session_start", ctx);
+
+    const payload = payloads.at(-1)!;
+    expect(payload.provider).toBe("anthropic");
+    // Named so a consumer can suppress the raw status this supersedes.
+    expect(payload.statusKey).toBe("pi-quotas-usage");
+    expect(
+      payload.windows.map((w) => [w.shortLabel, w.kind, w.valueText, w.barPercent]),
+    ).toEqual([
+      ["5h", "hours", "34%", 34],
+      ["fable", "week", "93%", 93],
+    ]);
+    // The feed carries assessWindow's verdict rather than re-deriving it, which
+    // is the whole reason a consumer cannot work from the rendered text.
+    expect(payload.windows.map((w) => w.severity)).toEqual(
+      windows.map((w) => assessWindow(w).severity),
+    );
+  });
+
+  it("clears the feed when the provider has nothing to report", async () => {
+    vi.mocked(fetchProviderQuotas).mockResolvedValueOnce({
+      success: false,
+      error: { kind: "not_applicable", message: "Direct API key" },
+    } as any);
+
+    const { pi, emitExtensionEvent } = createFakePi();
+    const payloads = collect(pi);
+    const { ctx } = createContext("anthropic");
+
+    await usageStatusExtension(pi);
+    await emitExtensionEvent("session_start", ctx);
+
+    expect(payloads.at(-1)!.windows).toEqual([]);
+  });
+
+  it("clears the feed when the provider is unsupported", async () => {
+    const { pi, emitExtensionEvent } = createFakePi();
+    const payloads = collect(pi);
+    const { ctx } = createContext("unsupported-provider");
+
+    await usageStatusExtension(pi);
+    await emitExtensionEvent("session_start", ctx);
+
+    expect(payloads.at(-1)).toMatchObject({ provider: null, windows: [] });
+  });
+
+  it("clears the feed on session shutdown", async () => {
+    const { pi, emitExtensionEvent } = createFakePi();
+    const payloads = collect(pi);
+    const { ctx } = createContext("anthropic");
+
+    await usageStatusExtension(pi);
+    await emitExtensionEvent("session_start", ctx);
+    await emitExtensionEvent("session_shutdown", ctx);
+
+    expect(payloads.at(-1)!.windows).toEqual([]);
   });
 });

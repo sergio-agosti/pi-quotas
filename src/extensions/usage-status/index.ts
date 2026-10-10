@@ -22,16 +22,17 @@ import {
 } from "../../lib/quotas.js";
 import {
   assessWindow,
-  formatTimeRemaining,
   getSeverityColor,
 } from "../../utils/quotas-severity.js";
 import type { QuotaWindow } from "../../types/quotas.js";
 import {
+  formatFooterResetTime,
   formatWindowStatus,
   remainingPercent,
   type ThemeLike,
   type WindowStatus,
 } from "./format-status.js";
+import { QUOTAS_USAGE_UPDATED_EVENT, buildUsageFeed } from "./feed.js";
 
 const EXTENSION_ID = "pi-quotas-usage";
 const REFRESH_INTERVAL_MS = 60_000;
@@ -88,16 +89,6 @@ function scopedInlineStatus(
   return `${separator}${values.join(separator)}`;
 }
 
-// [local patch] Footer reset tag: " ↺ 2d·1h·7m" rather than
-// " (↺in 2d 1h 7m)". The "↺" is set off with a space on both sides so it does
-// not weld onto the value, and the " · " between windows still separates
-// them. `formatTimeRemaining` is left alone because the /quotas overlay uses
-// it for its roomier "Resets in 2d 1h 7m" subtitle.
-function formatFooterResetTime(resetsAt: string): string {
-  const remaining = formatTimeRemaining(new Date(resetsAt));
-  return ` ↺ ${remaining.replaceAll(" ", "·")}`;
-}
-
 export function formatStatus(ctx: Pick<ExtensionContext, "ui">, windows: WindowStatus[]): string {
   const theme = ctx.ui.theme;
 
@@ -141,6 +132,7 @@ export function toWindowStatus(window: QuotaWindow): WindowStatus {
     isCurrency: window.isCurrency,
     usedValue: window.usedValue,
     limitValue: window.limitValue,
+    windowSeconds: window.windowSeconds,
   };
 }
 
@@ -156,7 +148,7 @@ export function formatStatusForFooter(
   return formatStatus(ctx, windows);
 }
 
-function createStatusRefresher() {
+function createStatusRefresher(pi: ExtensionAPI) {
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
   let activeContext: ExtensionContext | undefined;
   let activeProvider: string | undefined;
@@ -168,14 +160,36 @@ function createStatusRefresher() {
   // This prevents an old async fetch from writing to a replacement session.
   let generation = 0;
 
+  /**
+   * Publish the structured form of what the footer is showing. Called on every
+   * transition, including the clears, so a consumer never keeps rendering data
+   * the footer has already dropped.
+   */
+  function publish(
+    windows: WindowStatus[] | undefined,
+    provider: string | undefined,
+  ): void {
+    pi.events.emit(
+      QUOTAS_USAGE_UPDATED_EVENT,
+      buildUsageFeed({
+        statusKey: EXTENSION_ID,
+        provider: isSupportedProvider(provider) ? provider : null,
+        windows: windows ?? [],
+        fetchedAt: new Date(),
+      }),
+    );
+  }
+
   function deactivate(): void {
     if (refreshTimer) clearInterval(refreshTimer);
     refreshTimer = undefined;
+    const provider = activeProvider;
     activeContext = undefined;
     activeProvider = undefined;
     lastStatus = undefined;
     queued = false;
     generation++;
+    publish(undefined, provider);
   }
 
   function setStatusSafely(
@@ -213,6 +227,7 @@ function createStatusRefresher() {
         // rather than a persistent "usage unavailable" warning.
         if (result.error.kind === "not_applicable") {
           setStatusSafely(ctx, undefined);
+          publish(undefined, provider);
           return;
         }
         setStatusSafely(ctx, (ctx) => ctx.ui.theme.fg("warning", "usage unavailable"));
@@ -221,13 +236,18 @@ function createStatusRefresher() {
       const windows: WindowStatus[] = toStatusWindows(result.data.windows);
       const status = formatStatusForFooter(ctx, windows);
       lastStatus = status === undefined ? undefined : windows;
-      setStatusSafely(ctx, status);
+      // Only publish once the status has actually landed: a stale ctx makes
+      // setStatusSafely deactivate, which publishes a clear, and publishing
+      // after that would leave the feed holding data the footer has dropped.
+      if (setStatusSafely(ctx, status)) publish(windows, provider);
     } catch (error) {
       if (isStaleContextError(error)) {
         if (activeContext === ctx) deactivate();
         return;
       }
-      setStatusSafely(ctx, (ctx) => ctx.ui.theme.fg("warning", "usage unavailable"));
+      if (setStatusSafely(ctx, (ctx) => ctx.ui.theme.fg("warning", "usage unavailable"))) {
+        publish(undefined, activeProvider);
+      }
     } finally {
       inFlight = false;
       if (queued && activeContext) {
@@ -245,6 +265,7 @@ function createStatusRefresher() {
       const requestGeneration = generation;
       if (!activeProvider || !isSupportedProvider(activeProvider)) {
         setStatusSafely(ctx, undefined);
+        publish(undefined, activeProvider);
         return;
       }
       await update(ctx, requestGeneration);
@@ -269,7 +290,7 @@ function createStatusRefresher() {
 
 export default async function (pi: ExtensionAPI) {
   await configLoader.load();
-  const refresher = createStatusRefresher();
+  const refresher = createStatusRefresher(pi);
   const unsubscribeEventBusListeners: Array<() => void> = [];
   let enabled = configLoader.getConfig().usageStatus;
   let deferToSynthetic = configLoader.getConfig().deferToSynthetic;

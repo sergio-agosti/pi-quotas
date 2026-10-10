@@ -26,6 +26,7 @@ describe("formatWindowStatus", () => {
       limited: false,
       usedValue: 7,
       limitValue: 300,
+      windowSeconds: 30 * 24 * 60 * 60,
     };
     const result = formatWindowStatus(theme, w);
     expect(result).toContain("293/300");
@@ -41,6 +42,7 @@ describe("formatWindowStatus", () => {
       limited: false,
       usedValue: 9,
       limitValue: 100,
+      windowSeconds: 5 * 60 * 60,
     };
     const result = formatWindowStatus(theme, w);
     expect(result).toContain("91%");
@@ -59,6 +61,7 @@ describe("formatWindowStatus", () => {
       isCurrency: true,
       usedValue: 215,
       limitValue: 300,
+      windowSeconds: 30 * 24 * 60 * 60,
     };
     const result = formatWindowStatus(theme, w);
     expect(result).toContain("$215.00/$300.00");
@@ -74,6 +77,7 @@ describe("formatWindowStatus", () => {
       limited: true,
       usedValue: 1,
       limitValue: 1,
+      windowSeconds: 0,
     };
     const result = formatWindowStatus(theme, w);
     expect(result).toContain("REACHED");
@@ -89,6 +93,7 @@ describe("formatWindowStatus", () => {
       limited: false,
       usedValue: 85,
       limitValue: 100,
+      windowSeconds: 7 * 24 * 60 * 60,
     };
     const result = formatWindowStatus(theme, w);
     // label should be colored with error (high maps to error)
@@ -106,6 +111,7 @@ describe("formatWindowStatus", () => {
       limited: false,
       usedValue: 10,
       limitValue: 100,
+      windowSeconds: 5 * 60 * 60,
     };
     const result = formatWindowStatus(theme, w);
     expect(result).toContain("[dim]5h:");
@@ -155,6 +161,7 @@ describe("formatWindowStatus", () => {
           limited: false,
           usedValue: 0,
           limitValue: 1,
+          windowSeconds: 0,
         },
       ],
     );
@@ -247,6 +254,7 @@ describe("formatWindowStatus", () => {
           limited: false,
           usedValue: 100,
           limitValue: 100,
+          windowSeconds: 5 * 60 * 60,
         },
       ],
     );
