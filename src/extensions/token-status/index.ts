@@ -2,7 +2,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
   ThemeColor,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import {
   QUOTAS_CONFIG_UPDATED_EVENT,
   QUOTAS_EXTENSIONS_REGISTER_EVENT,

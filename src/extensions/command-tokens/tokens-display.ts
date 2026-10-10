@@ -1,7 +1,7 @@
-import type { Theme } from "@mariozechner/pi-coding-agent";
-import { DynamicBorder } from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
-import { Loader, matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
+import { Loader, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import pkg from "../../../package.json" with { type: "json" };
 import type {
   AggregateResult,

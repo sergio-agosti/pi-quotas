@@ -3,7 +3,7 @@ import { join } from "node:path";
 import {
   getAgentDir,
   type AuthStorage,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 
 type CompatibleModelRegistry = {
   authStorage?: AuthStorage;

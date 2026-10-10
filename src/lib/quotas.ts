@@ -1,4 +1,4 @@
-import type { AuthStorage } from "@mariozechner/pi-coding-agent";
+import type { AuthStorage } from "@earendil-works/pi-coding-agent";
 import { PROVIDER_FETCHERS } from "../providers/fetch.js";
 import type { QuotasResult, SupportedQuotaProvider } from "../types/quotas.js";
 
