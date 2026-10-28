@@ -75,7 +75,38 @@ describe("assessWindow", () => {
     expect(assessWindow(w).severity).toBe("critical");
   });
 
-  it("warns for pace-aware windows once absolute usage reaches 80%", () => {
+  it("returns critical once the allowance is spent, even at a safe pace", () => {
+    const w = makeWindow({
+      usedPercent: 100,
+      showPace: true,
+      windowSeconds: 3600,
+      resetsAt: new Date(Date.now() + 3300 * 1000),
+    });
+    expect(assessWindow(w).severity).toBe("critical");
+  });
+
+  it("colours by pace, so high usage on pace is not red", () => {
+    const w = makeWindow({
+      usedPercent: 50,
+      showPace: true,
+      windowSeconds: 3600,
+      resetsAt: new Date(Date.now() + 1800 * 1000),
+    });
+
+    const assessment = assessWindow(w);
+    expect(assessment.projectedPercent).toBeCloseTo(100, 0);
+    expect(assessment.severity).toBe("warning");
+
+    const onPace = makeWindow({
+      usedPercent: 50,
+      showPace: true,
+      windowSeconds: 3600,
+      resetsAt: new Date(Date.now() + 1620 * 1000),
+    });
+    expect(assessWindow(onPace).severity).toBe("none");
+  });
+
+  it("goes red for high usage that is also over pace", () => {
     const now = Date.now();
     const monthSeconds = 31 * 24 * 3600;
     const w = makeWindow({
@@ -86,24 +117,56 @@ describe("assessWindow", () => {
       limitValue: 300,
       showPace: true,
       windowSeconds: monthSeconds,
-      // Screenshot repro: 51/300 left with reset in about 428h35m in a 31-day
-      // monthly window. Dynamic pace alone projects just under warning, but
-      // only 17% remains, so low-quota color should still be amber.
+      // 249/300 used 42% of the way through a monthly window: projects to ~196%,
+      // so the budget runs out roughly halfway to the reset.
       resetsAt: new Date(now + ((428 * 60 + 35) * 60 * 1000)),
     });
 
-    expect(assessWindow(w).severity).toBe("warning");
+    const assessment = assessWindow(w);
+    expect(assessment.projectedPercent).toBeGreaterThan(175);
+    expect(assessment.severity).toBe("critical");
   });
 
-  it("returns warning when projected exceeds dynamic warn threshold", () => {
-    const w = makeWindow({
-      usedPercent: 79,
+  it("escalates to high and critical on steep projection", () => {
+    const high = makeWindow({
+      usedPercent: 70,
       showPace: true,
-      paceScale: 1,
       windowSeconds: 3600,
-      resetsAt: new Date(Date.now() + 2520 * 1000),
+      resetsAt: new Date(Date.now() + 1800 * 1000),
     });
-    expect(assessWindow(w).severity).toBe("warning");
+    expect(assessWindow(high).severity).toBe("high");
+
+    const critical = makeWindow({
+      usedPercent: 95,
+      showPace: true,
+      windowSeconds: 3600,
+      resetsAt: new Date(Date.now() + 1800 * 1000),
+    });
+    expect(assessWindow(critical).severity).toBe("critical");
+  });
+
+  it("ignores projection below the floor so an early burst is not red", () => {
+    // 6% used after 6% of the window: projects to 100%, but both the elapsed and
+    // used amounts are under the floor, where pace is mostly noise.
+    const w = makeWindow({
+      usedPercent: 6,
+      showPace: true,
+      windowSeconds: 3600,
+      resetsAt: new Date(Date.now() + 3384 * 1000),
+    });
+
+    const assessment = assessWindow(w);
+    expect(assessment.projectedPercent).toBeGreaterThanOrEqual(100);
+    expect(assessment.severity).toBe("none");
+  });
+
+  it("falls back to absolute usage when the window has no pace", () => {
+    expect(
+      assessWindow(makeWindow({ usedPercent: 85, showPace: false })).severity,
+    ).toBe("warning");
+    expect(
+      assessWindow(makeWindow({ usedPercent: 95, showPace: false })).severity,
+    ).toBe("high");
   });
 
   it("uses paceScale to normalize pace", () => {

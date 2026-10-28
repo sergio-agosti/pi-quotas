@@ -43,8 +43,8 @@ describe("buildUsageFeed", () => {
   });
 
   it("carries the pace-aware severity rather than letting it be re-derived", () => {
-    // The same 85% is "warning" early in a window and "none" late in one, so a
-    // consumer that parsed the percentage could not recover this.
+    // The same 85% is over pace in a short window and on pace in a long one, so
+    // a consumer that parsed the percentage could not recover this.
     const payload = feed("anthropic", [
       status({ label: "7d", usedPercent: 85, severity: "warning", windowSeconds: 7 * DAY }),
     ]);

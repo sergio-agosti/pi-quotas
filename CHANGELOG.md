@@ -5,6 +5,9 @@ All notable changes to this project will be documented in this file.
 ## Unreleased
 
 ### Changed
+- **Footer colour now means pace, not amount**: quota severity no longer mixes a moving absolute-usage floor and window-length-dependent thresholds with the projection. Windows with a pace are coloured by projected end-of-window usage alone — amber at 100% (you run out exactly at the reset), red at 130% and 175% — with a fixed 10% floor for used and elapsed so a burst in the first minutes of a window does not paint the footer red. Reaching the limit is still always red. Windows without a reset time keep 80%/90%/100% used thresholds. This restores the footer's promise that amber means "spending faster than this window allows", at the cost of no longer flagging a high-but-on-pace remaining amount.
+
+### Changed
 - **OpenCode Go uses the official usage API**: rolling 5h / weekly / monthly percents and reset times now come from `GET https://opencode.ai/zen/go/v1/usage` using the `opencode-go` API key stored by `pi /login` (or `OPENCODE_API_KEY`). No workspace ID, browser auth cookie, or dashboard HTML scraping is needed. The `OPENCODE_GO_WORKSPACE_ID` / `OPENCODE_GO_AUTH_COOKIE` configuration and `~/.config/opencode/opencode-quota/opencode-go.json` file are no longer read.
 
 ## [0.5.0] - 2026-08-31

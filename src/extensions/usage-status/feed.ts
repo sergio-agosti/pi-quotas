@@ -16,8 +16,8 @@ import { windowKind, type QuotaWindowKind } from "./window-kind.js";
  * otherwise have to parse percentages back out of the text. That loses the
  * pace-aware `severity` from assessWindow(), which depends on how far through
  * the window we are and not only on the percentage, so a parsed value is not
- * merely less precise but frequently wrong: the same 85% is `warning` early in
- * a window and `none` late in one.
+ * merely less precise but frequently wrong: two windows at 85% used can differ
+ * in severity, one over pace and one not.
  *
  * This payload is the same data the footer renders, unrendered. The text
  * status remains the source of truth for consumers that only print it.

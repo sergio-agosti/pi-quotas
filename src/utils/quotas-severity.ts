@@ -5,31 +5,39 @@ export type RiskSeverity = "none" | "warning" | "high" | "critical";
 
 export interface WindowProjection {
   pacePercent: number | null;
-  progress: number | null;
   projectedPercent: number;
   usedPercent: number;
 }
 
 export interface RiskAssessment extends WindowProjection {
-  usedFloorPercent: number | null;
-  warnProjectedPercent: number | null;
-  highProjectedPercent: number | null;
-  criticalProjectedPercent: number | null;
   severity: RiskSeverity;
 }
 
 const MIN_PACE_PERCENT = 5;
-const THRESHOLDS = {
-  usedFloor: { start: 33, end: 8 },
-  warnProjected: { start: 260, end: 120 },
-  highProjected: { start: 320, end: 145 },
-  criticalProjected: { start: 400, end: 170 },
+
+/**
+ * Projection thresholds, in projected end-of-window usage percent. Fixed, so the
+ * colour can be read off the numbers: amber means "at this pace this window runs
+ * out before it resets", red that it runs out well before.
+ */
+export const PROJECTION_THRESHOLDS = {
+  warning: 100,
+  high: 130,
+  critical: 175,
 };
 
-function interpolate(start: number, end: number, progress: number): number {
-  const clampedProgress = Math.max(0, Math.min(1, progress));
-  return start + (end - start) * clampedProgress;
-}
+/**
+ * Projection is ignored until the window has both elapsed and consumed this much,
+ * so a burst in the first minutes of a window does not paint the footer red.
+ */
+export const PROJECTION_FLOOR_PERCENT = 10;
+
+/** Used-usage thresholds for windows with no pace to project from. */
+export const ABSOLUTE_THRESHOLDS = {
+  warning: 80,
+  high: 90,
+  critical: 100,
+};
 
 export function safePercent(used: number, limit: number): number {
   if (!Number.isFinite(used) || !Number.isFinite(limit) || limit <= 0) return 0;
@@ -57,15 +65,17 @@ function absoluteUsageSeverity(
   window: QuotaWindow,
   percent: number,
 ): RiskSeverity {
-  if (window.limited || percent >= 100) return "critical";
-  if (percent >= 90) return "high";
-  if (percent >= 80) return "warning";
+  if (window.limited || percent >= ABSOLUTE_THRESHOLDS.critical) return "critical";
+  if (percent >= ABSOLUTE_THRESHOLDS.high) return "high";
+  if (percent >= ABSOLUTE_THRESHOLDS.warning) return "warning";
   return "none";
 }
 
-function maxSeverity(a: RiskSeverity, b: RiskSeverity): RiskSeverity {
-  const order: RiskSeverity[] = ["none", "warning", "high", "critical"];
-  return order[Math.max(order.indexOf(a), order.indexOf(b))] ?? "none";
+function projectedSeverity(projectedPercent: number): RiskSeverity {
+  if (projectedPercent >= PROJECTION_THRESHOLDS.critical) return "critical";
+  if (projectedPercent >= PROJECTION_THRESHOLDS.high) return "high";
+  if (projectedPercent >= PROJECTION_THRESHOLDS.warning) return "warning";
+  return "none";
 }
 
 export function assessWindow(window: QuotaWindow): RiskAssessment {
@@ -73,68 +83,32 @@ export function assessWindow(window: QuotaWindow): RiskAssessment {
   const pacePercent =
     rawPace !== null ? rawPace * (window.paceScale ?? 1) : null;
   const projectedPercent = getProjectedPercent(window.usedPercent, pacePercent);
-  const absoluteSeverity = absoluteUsageSeverity(window, window.usedPercent);
-
-  let progress: number | null = null;
-  if (pacePercent !== null) progress = pacePercent / 100;
 
   const base: WindowProjection = {
     pacePercent,
-    progress,
     projectedPercent,
     usedPercent: window.usedPercent,
   };
 
-  if (progress === null) {
-    const severity = absoluteUsageSeverity(window, projectedPercent);
-
-    return {
-      ...base,
-      usedFloorPercent: null,
-      warnProjectedPercent: 80,
-      highProjectedPercent: 90,
-      criticalProjectedPercent: 100,
-      severity,
-    };
+  // Being out of budget is the one state the projection can miss: it assumes
+  // steady spend, so it stays green while a burst could eat the last few percent.
+  if (window.limited || window.usedPercent >= 100) {
+    return { ...base, severity: "critical" };
   }
 
-  const usedFloorPercent = interpolate(
-    THRESHOLDS.usedFloor.start,
-    THRESHOLDS.usedFloor.end,
-    progress,
-  );
-  const warnProjectedPercent = interpolate(
-    THRESHOLDS.warnProjected.start,
-    THRESHOLDS.warnProjected.end,
-    progress,
-  );
-  const highProjectedPercent = interpolate(
-    THRESHOLDS.highProjected.start,
-    THRESHOLDS.highProjected.end,
-    progress,
-  );
-  const criticalProjectedPercent = interpolate(
-    THRESHOLDS.criticalProjected.start,
-    THRESHOLDS.criticalProjected.end,
-    progress,
-  );
-
-  let severity: RiskSeverity = "none";
-  if (window.limited) {
-    severity = "critical";
-  } else if (window.usedPercent >= usedFloorPercent) {
-    if (projectedPercent >= criticalProjectedPercent) severity = "critical";
-    else if (projectedPercent >= highProjectedPercent) severity = "high";
-    else if (projectedPercent >= warnProjectedPercent) severity = "warning";
+  // No pace to project from (e.g. a window that shows no reset time): the colour
+  // can only describe what has already been used.
+  if (pacePercent === null) {
+    return { ...base, severity: absoluteUsageSeverity(window, projectedPercent) };
   }
+
+  const pastFloor =
+    window.usedPercent >= PROJECTION_FLOOR_PERCENT &&
+    (rawPace ?? 0) >= PROJECTION_FLOOR_PERCENT;
 
   return {
     ...base,
-    usedFloorPercent,
-    warnProjectedPercent,
-    highProjectedPercent,
-    criticalProjectedPercent,
-    severity: maxSeverity(severity, absoluteSeverity),
+    severity: pastFloor ? projectedSeverity(projectedPercent) : "none",
   };
 }
 

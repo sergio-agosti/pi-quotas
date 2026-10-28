@@ -61,7 +61,9 @@ The combined dashboard hides providers with no configured subscription, credenti
 
 ### Footer status widget
 
-When your active model is from a supported provider, the Pi footer shows real-time quota headroom - updated every 60 seconds and on each turn. Colours shift from green → amber → red as usage climbs.
+When your active model is from a supported provider, the Pi footer shows real-time quota headroom - updated every 60 seconds and on each turn.
+
+The footer prints the *remaining* percent, but colours it by *pace*: green while usage is on track to fit the window, amber once it projects to run out before the reset (100% projected), and red once it projects to run out well before (130% / 175%). Because the number and the colour answer different questions, a window at 40% remaining can be green late in its window while one at 70% remaining is red early in its window. Windows that report no reset time have no pace to project from and are coloured by usage instead (80% / 90% / 100%). Reaching the limit always shows red.
 
 ### Quota warnings
 
