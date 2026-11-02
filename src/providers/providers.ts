@@ -19,6 +19,45 @@ function monthWindowSeconds(resetAt: Date): number {
   );
 }
 
+/**
+ * Windows from the `anthropic-ratelimit-unified-*` headers carried by every
+ * subscription `/v1/messages` response. Same shape as parseAnthropicUsage's
+ * 5h / 7d windows, but utilization is a 0..1 fraction and reset is epoch
+ * seconds. Overage has no counterpart in the endpoint's windows, so it is
+ * ignored. A window with a missing or unparseable value is skipped.
+ */
+export function parseAnthropicUnifiedHeaders(
+  headers: Record<string, string>,
+): QuotaWindow[] {
+  const windows: QuotaWindow[] = [];
+  const claims: Array<[string, string, number]> = [
+    ["5h", "5h", 5 * 60 * 60],
+    ["7d", "7d", 7 * 24 * 60 * 60],
+  ];
+  for (const [claim, label, windowSeconds] of claims) {
+    const utilization = headers?.[`anthropic-ratelimit-unified-${claim}-utilization`];
+    const reset = headers?.[`anthropic-ratelimit-unified-${claim}-reset`];
+    // Number("") is 0, so a missing value would read as 0% used.
+    if (!utilization || !reset) continue;
+    const fraction = Number(utilization);
+    const resetSeconds = Number(reset);
+    if (!Number.isFinite(fraction) || !Number.isFinite(resetSeconds)) continue;
+    const usedPercent = fraction * 100;
+    windows.push({
+      provider: "anthropic",
+      label,
+      usedPercent,
+      resetsAt: new Date(resetSeconds * 1000),
+      windowSeconds,
+      usedValue: usedPercent,
+      limitValue: 100,
+      showPace: false,
+      nextLabel: "Resets",
+    });
+  }
+  return windows;
+}
+
 export function parseAnthropicUsage(data: any): QuotaWindow[] {
   const windows: QuotaWindow[] = [];
 

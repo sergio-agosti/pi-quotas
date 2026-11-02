@@ -18,6 +18,7 @@ import {
 } from "./providers.js";
 import {
   readClaudeCacheOutcome,
+  readClaudeHeaderWindows,
   recordClaudeRateLimit,
   recordClaudeSuccess,
   withClaudeCacheLock,
@@ -159,6 +160,26 @@ function failure(
   return { success: false, error: { message, kind } };
 }
 
+/**
+ * Tokens the usage endpoint answered 403 for (a `claude setup-token` lacks the
+ * user:profile scope). Kept per process and per token, so a refresh does not
+ * re-ask the endpoint but a different token does.
+ */
+const anthropicUsageForbiddenTokens = new Set<string>();
+
+/**
+ * Usage for a token the endpoint refuses: the windows recorded from model
+ * response headers, or a silent result until the first response lands.
+ */
+function anthropicHeaderFallback(): QuotasResult {
+  const windows = readClaudeHeaderWindows();
+  if (windows.length > 0) return success("anthropic", windows);
+  return failure(
+    "Claude usage appears after the first response",
+    "not_applicable",
+  );
+}
+
 export async function fetchAnthropicQuotasWithToken(
   accessToken: string | undefined,
   signal?: AbortSignal,
@@ -173,6 +194,9 @@ export async function fetchAnthropicQuotasWithToken(
       "Direct Anthropic API key — no subscription usage to report",
       "not_applicable",
     );
+  }
+  if (anthropicUsageForbiddenTokens.has(accessToken)) {
+    return anthropicHeaderFallback();
   }
 
   // Serve a fresh shared cache hit, or last-known-good windows during a 429
@@ -210,6 +234,11 @@ export async function fetchAnthropicQuotasWithToken(
       const windows = parseAnthropicUsage(result.data);
       recordClaudeSuccess(windows);
       return success("anthropic", windows);
+    }
+
+    if (result.kind === "http" && result.status === 403) {
+      anthropicUsageForbiddenTokens.add(accessToken);
+      return anthropicHeaderFallback();
     }
 
     // Rate limit: back off exponentially and fall back to last-known-good.

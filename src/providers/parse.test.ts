@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseAnthropicUsage } from "./providers.js";
+import { parseAnthropicUnifiedHeaders, parseAnthropicUsage } from "./providers.js";
 import { parseCodexUsage } from "./providers.js";
 import { parseGitHubCopilotUsage } from "./providers.js";
 import { parseKimiCodingUsage } from "./providers.js";
@@ -161,6 +161,60 @@ describe("parseAnthropicUsage", () => {
       extra_usage: { is_enabled: false },
     });
     expect(windows.find((w) => w.label.startsWith("Extra"))).toBeUndefined();
+  });
+});
+
+describe("parseAnthropicUnifiedHeaders", () => {
+  it("maps the unified rate-limit headers onto the endpoint's 5h and 7d windows", () => {
+    const windows = parseAnthropicUnifiedHeaders({
+      "anthropic-ratelimit-unified-5h-utilization": "0.71",
+      "anthropic-ratelimit-unified-5h-reset": "1793655600",
+      "anthropic-ratelimit-unified-5h-status": "allowed",
+      "anthropic-ratelimit-unified-7d-utilization": "0.19",
+      "anthropic-ratelimit-unified-7d-reset": "1794160800",
+      "anthropic-ratelimit-unified-7d-status": "allowed",
+      "anthropic-ratelimit-unified-overage-utilization": "0.0",
+      "anthropic-ratelimit-unified-representative-claim": "five_hour",
+    });
+
+    expect(windows).toEqual([
+      {
+        provider: "anthropic",
+        label: "5h",
+        usedPercent: 71,
+        resetsAt: new Date("2026-11-02T21:40:00.000Z"),
+        windowSeconds: 5 * 60 * 60,
+        usedValue: 71,
+        limitValue: 100,
+        showPace: false,
+        nextLabel: "Resets",
+      },
+      {
+        provider: "anthropic",
+        label: "7d",
+        usedPercent: 19,
+        resetsAt: new Date("2026-11-08T18:00:00.000Z"),
+        windowSeconds: 7 * 24 * 60 * 60,
+        usedValue: 19,
+        limitValue: 100,
+        showPace: false,
+        nextLabel: "Resets",
+      },
+    ]);
+  });
+
+  it("returns no windows for missing or garbage headers", () => {
+    expect(parseAnthropicUnifiedHeaders({})).toEqual([]);
+    expect(parseAnthropicUnifiedHeaders({ "content-type": "text/event-stream" })).toEqual([]);
+    expect(
+      parseAnthropicUnifiedHeaders({
+        "anthropic-ratelimit-unified-5h-utilization": "lots",
+        "anthropic-ratelimit-unified-5h-reset": "1793655600",
+        "anthropic-ratelimit-unified-7d-utilization": "0.19",
+        "anthropic-ratelimit-unified-7d-reset": "soon",
+      }),
+    ).toEqual([]);
+    expect(parseAnthropicUnifiedHeaders(undefined as any)).toEqual([]);
   });
 });
 

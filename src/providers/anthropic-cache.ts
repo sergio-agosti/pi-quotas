@@ -236,6 +236,52 @@ export function recordClaudeRateLimit(
   return windows ? deserializeWindows(windows) : null;
 }
 
+/**
+ * Windows parsed from the `anthropic-ratelimit-unified-*` headers of model
+ * responses, for tokens the usage endpoint refuses (a `claude setup-token` has
+ * only the inference scope, so /api/oauth/usage answers 403).
+ *
+ * Kept in their own file next to the endpoint cache rather than in it: they
+ * carry fewer windows than the endpoint, so they must never be served as the
+ * endpoint's last-known-good. Each write replaces the whole file atomically,
+ * so no lock is needed.
+ */
+function claudeHeadersFile(): string {
+  return join(dirname(claudeCacheFile()), "pi-quotas-claude-headers.json");
+}
+
+/** Record the windows read from the latest Anthropic response's headers. */
+export function recordClaudeHeaderWindows(windows: QuotaWindow[]): void {
+  try {
+    const file = claudeHeadersFile();
+    const directory = dirname(file);
+    if (!existsSync(directory))
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const temporaryPath = `${file}.tmp-${process.pid}-${Date.now()}`;
+    writeFileSync(temporaryPath, JSON.stringify(serializeWindows(windows)), {
+      mode: 0o600,
+    });
+    renameSync(temporaryPath, file);
+  } catch {
+    // Best effort: the next response records them again.
+  }
+}
+
+/**
+ * The last header-derived windows that have not reset since. Headers only
+ * arrive with model responses, so a window past its reset carries a figure
+ * that no longer holds.
+ */
+export function readClaudeHeaderWindows(nowMs = Date.now()): QuotaWindow[] {
+  try {
+    const list = JSON.parse(readFileSync(claudeHeadersFile(), "utf8"));
+    if (!Array.isArray(list)) return [];
+    return deserializeWindows(list).filter((w) => w.resetsAt.getTime() > nowMs);
+  } catch {
+    return [];
+  }
+}
+
 function safeUnlink(filePath: string): void {
   try {
     unlinkSync(filePath);

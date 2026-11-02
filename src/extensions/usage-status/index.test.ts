@@ -1,9 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import usageStatusExtension from "./index.js";
 import { fetchProviderQuotas } from "../../lib/quotas.js";
 import { assessWindow } from "../../utils/quotas-severity.js";
 import { QUOTAS_USAGE_UPDATED_EVENT, type QuotasUsagePayload } from "./feed.js";
+import { readClaudeHeaderWindows } from "../../providers/anthropic-cache.js";
 
 vi.mock("../../config.js", () => ({
   QUOTAS_CONFIG_UPDATED_EVENT: "quotas:config:updated",
@@ -63,9 +67,13 @@ function createFakePi() {
 
   return {
     pi,
-    async emitExtensionEvent(event: string, ctx: ExtensionContext) {
+    async emitExtensionEvent(
+      event: string,
+      ctx: ExtensionContext,
+      payload: unknown = { type: event, reason: "test" },
+    ) {
       for (const handler of extensionHandlers.get(event) ?? []) {
-        await handler({ type: event, reason: "test" }, ctx);
+        await handler(payload, ctx);
       }
     },
     emitBusEvent(channel: string, data: unknown) {
@@ -282,5 +290,69 @@ describe("usage feed", () => {
     await emitExtensionEvent("session_shutdown", ctx);
 
     expect(payloads.at(-1)!.windows).toEqual([]);
+  });
+});
+
+describe("Anthropic usage from response headers", () => {
+  let cacheDir: string;
+
+  beforeEach(() => {
+    cacheDir = mkdtempSync(join(tmpdir(), "pi-quotas-test-"));
+    process.env.PI_QUOTAS_CLAUDE_CACHE_FILE = join(cacheDir, "cache.json");
+  });
+
+  afterEach(() => {
+    delete process.env.PI_QUOTAS_CLAUDE_CACHE_FILE;
+    rmSync(cacheDir, { recursive: true, force: true });
+  });
+
+  const inAnHour = Math.floor(Date.now() / 1000) + 3600;
+  const response = {
+    type: "after_provider_response",
+    status: 200,
+    headers: {
+      "anthropic-ratelimit-unified-5h-utilization": "0.71",
+      "anthropic-ratelimit-unified-5h-reset": String(inAnHour),
+      "anthropic-ratelimit-unified-7d-utilization": "0.19",
+      "anthropic-ratelimit-unified-7d-reset": String(inAnHour + 3600),
+    },
+  };
+
+  it("records the windows from an Anthropic response for every Pi process", async () => {
+    const { pi, emitExtensionEvent } = createFakePi();
+    const { ctx } = createContext("anthropic");
+
+    await usageStatusExtension(pi);
+    await emitExtensionEvent("after_provider_response", ctx, response);
+
+    expect(readClaudeHeaderWindows()).toMatchObject([
+      { label: "5h", usedPercent: 71 },
+      { label: "7d", usedPercent: 19 },
+    ]);
+  });
+
+  it("ignores responses from other providers", async () => {
+    const { pi, emitExtensionEvent } = createFakePi();
+    const { ctx } = createContext("openai-codex");
+
+    await usageStatusExtension(pi);
+    await emitExtensionEvent("after_provider_response", ctx, response);
+
+    expect(readClaudeHeaderWindows()).toEqual([]);
+  });
+
+  it("keeps the last windows when a response carries no usage headers", async () => {
+    const { pi, emitExtensionEvent } = createFakePi();
+    const { ctx } = createContext("anthropic");
+
+    await usageStatusExtension(pi);
+    await emitExtensionEvent("after_provider_response", ctx, response);
+    await emitExtensionEvent("after_provider_response", ctx, {
+      type: "after_provider_response",
+      status: 500,
+      headers: {},
+    });
+
+    expect(readClaudeHeaderWindows()).toHaveLength(2);
   });
 });

@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Added
+- **Claude usage for setup-tokens**: a `claude setup-token` has only the inference scope, so `/api/oauth/usage` answers 403 and the footer showed "usage unavailable". The 5h / 7d windows are now read from the `anthropic-ratelimit-unified-*` headers of every Anthropic response, shared between Pi processes in a temp file separate from the endpoint cache, and served when the endpoint answers 403. Until the first response the footer shows nothing rather than a warning. The 403 is remembered per token for the life of the process, so refreshes stop asking. Tokens the endpoint accepts are unaffected.
+
 ### Changed
 - **Footer colour now means pace, not amount**: quota severity no longer mixes a moving absolute-usage floor and window-length-dependent thresholds with the projection. Windows with a pace are coloured by projected end-of-window usage alone — amber at 100% (you run out exactly at the reset), red at 130% and 175% — with a fixed 10% floor for used and elapsed so a burst in the first minutes of a window does not paint the footer red. Reaching the limit is still always red. Windows without a reset time keep 80%/90%/100% used thresholds. This restores the footer's promise that amber means "spending faster than this window allows", at the cost of no longer flagging a high-but-on-pace remaining amount.
 

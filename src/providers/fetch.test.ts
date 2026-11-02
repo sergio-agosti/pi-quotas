@@ -15,6 +15,8 @@ import {
   fetchSyntheticQuotas,
   fetchXaiQuotasWithToken,
 } from "./fetch.js";
+import { recordClaudeHeaderWindows } from "./anthropic-cache.js";
+import { parseAnthropicUnifiedHeaders } from "./providers.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -78,6 +80,123 @@ describe("fetchAnthropicQuotasWithToken", () => {
       expect(result.data.provider).toBe("anthropic");
       expect(result.data.windows).toHaveLength(2);
     }
+  });
+
+  describe("for a token the usage endpoint refuses (setup-token, 403)", () => {
+    const inAnHour = Math.floor(Date.now() / 1000) + 3600;
+    const inADay = inAnHour + 23 * 3600;
+    const headers = {
+      "anthropic-ratelimit-unified-5h-utilization": "0.71",
+      "anthropic-ratelimit-unified-5h-reset": String(inAnHour),
+      "anthropic-ratelimit-unified-7d-utilization": "0.19",
+      "anthropic-ratelimit-unified-7d-reset": String(inADay),
+    };
+
+    function forbidden(): Response {
+      return new Response(
+        JSON.stringify({
+          type: "error",
+          error: {
+            type: "permission_error",
+            message: "OAuth token does not meet scope requirement user:profile",
+          },
+        }),
+        { status: 403 },
+      );
+    }
+
+    it("falls back to the windows recorded from response headers", async () => {
+      recordClaudeHeaderWindows(parseAnthropicUnifiedHeaders(headers));
+      globalThis.fetch = vi.fn().mockResolvedValue(forbidden()) as any;
+
+      const result = await fetchAnthropicQuotasWithToken("sk-ant-oat01-setup-a");
+
+      expect(result).toMatchObject({
+        success: true,
+        data: {
+          provider: "anthropic",
+          windows: [
+            { label: "5h", usedPercent: 71, resetsAt: new Date(inAnHour * 1000) },
+            { label: "7d", usedPercent: 19, resetsAt: new Date(inADay * 1000) },
+          ],
+        },
+      });
+    });
+
+    it("drops a recorded window once it has reset, since its figure no longer holds", async () => {
+      const anHourAgo = Math.floor(Date.now() / 1000) - 3600;
+      recordClaudeHeaderWindows(
+        parseAnthropicUnifiedHeaders({
+          ...headers,
+          "anthropic-ratelimit-unified-5h-reset": String(anHourAgo),
+        }),
+      );
+      globalThis.fetch = vi.fn().mockResolvedValue(forbidden()) as any;
+
+      const result = await fetchAnthropicQuotasWithToken("sk-ant-oat01-setup-e");
+
+      expect(result).toMatchObject({
+        success: true,
+        data: { windows: [{ label: "7d", usedPercent: 19 }] },
+      });
+      if (result.success) expect(result.data.windows).toHaveLength(1);
+    });
+
+    it("stays quiet rather than warning before any response has been seen", async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(forbidden()) as any;
+
+      const result = await fetchAnthropicQuotasWithToken("sk-ant-oat01-setup-b");
+
+      expect(result).toMatchObject({
+        success: false,
+        error: { kind: "not_applicable" },
+      });
+    });
+
+    it("stops asking the endpoint for that token, but retries a different one", async () => {
+      const fetchSpy = vi.fn().mockImplementation(async () => forbidden());
+      globalThis.fetch = fetchSpy as any;
+
+      await fetchAnthropicQuotasWithToken("sk-ant-oat01-setup-c");
+      recordClaudeHeaderWindows(parseAnthropicUnifiedHeaders(headers));
+      const again = await fetchAnthropicQuotasWithToken("sk-ant-oat01-setup-c");
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(again).toMatchObject({
+        success: true,
+        data: { windows: [{ label: "5h" }, { label: "7d" }] },
+      });
+
+      await fetchAnthropicQuotasWithToken("sk-ant-oat01-setup-d");
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it("never lets header windows stand in for a working endpoint", async () => {
+      recordClaudeHeaderWindows(parseAnthropicUnifiedHeaders(headers));
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            five_hour: { utilization: 5, resets_at: "2026-04-22T18:30:00Z" },
+            seven_day: { utilization: 6, resets_at: "2026-04-25T08:30:00Z" },
+            seven_day_sonnet: { utilization: 7, resets_at: "2026-04-25T08:30:00Z" },
+          }),
+          { status: 200 },
+        ),
+      ) as any;
+
+      const result = await fetchAnthropicQuotasWithToken("sk-ant-oat01-host");
+
+      expect(result).toMatchObject({
+        success: true,
+        data: {
+          windows: [
+            { label: "5h", usedPercent: 5 },
+            { label: "7d", usedPercent: 6 },
+            { label: "7d Sonnet", usedPercent: 7 },
+          ],
+        },
+      });
+    });
   });
 });
 

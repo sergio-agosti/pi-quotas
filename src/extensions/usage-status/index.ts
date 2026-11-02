@@ -25,6 +25,8 @@ import {
   getSeverityColor,
 } from "../../utils/quotas-severity.js";
 import type { QuotaWindow } from "../../types/quotas.js";
+import { recordClaudeHeaderWindows } from "../../providers/anthropic-cache.js";
+import { parseAnthropicUnifiedHeaders } from "../../providers/providers.js";
 import {
   formatFooterResetTime,
   formatWindowStatus,
@@ -371,6 +373,15 @@ export default async function (pi: ExtensionAPI) {
       return;
     }
     scheduleRefresh(ctx);
+  });
+
+  // Every Anthropic subscription response reports the 5h / 7d utilization in
+  // its headers. Record them for tokens the usage endpoint refuses (setup
+  // tokens); the turn_end refresh then picks them up.
+  pi.on("after_provider_response", (event, ctx) => {
+    if (getContextProvider(ctx) !== "anthropic") return;
+    const windows = parseAnthropicUnifiedHeaders(event.headers);
+    if (windows.length > 0) recordClaudeHeaderWindows(windows);
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {

@@ -102,7 +102,7 @@ Settings can be saved globally (`~/.pi/agent/extensions/quotas.json`) or per-pro
 
 pi-quotas reads existing Pi auth entries from `~/.pi/agent/auth.json`:
 
-- `anthropic` — Anthropic OAuth token
+- `anthropic` — Anthropic OAuth token. A `claude setup-token` (`ANTHROPIC_OAUTH_TOKEN`) cannot read the usage endpoint, so its 5h / 7d windows come from the rate-limit headers of Claude responses instead and appear after the first response.
 - `openai-codex` — Codex access token (also reads `~/.codex/auth.json` for the account ID)
 - `github-copilot` — GitHub Copilot OAuth token (falls back to `gh auth token` if needed)
 - `openrouter` — OpenRouter API key (Bearer token)
